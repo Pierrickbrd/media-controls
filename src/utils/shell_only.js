@@ -35,7 +35,15 @@ export const getChromiumSnapImage = async (url) => {
         // The path is passed as an argument, never interpolated in the script. head stops one
         // byte past the limit, so a larger file is read no further and then rejected.
         const process = Gio.Subprocess.new(
-            ["snap", "run", "--shell", "chromium", "-c", `exec head -c ${MAX_SNAP_ART_BYTES + 1} -- "$0"`, `/tmp/${name}`],
+            [
+                "snap",
+                "run",
+                "--shell",
+                "chromium",
+                "-c",
+                `exec head -c ${MAX_SNAP_ART_BYTES + 1} -- "$0"`,
+                `/tmp/${name}`,
+            ],
             Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE,
         );
         let timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, SNAP_ART_TIMEOUT_SECONDS, () => {
@@ -337,8 +345,8 @@ export const pruneArtCache = async () => {
  * @returns {Promise<T>}
  */
 export const createDbusProxy = async (ifaceInfo, name, object) => {
-    // @ts-expect-error Types have not been promisified yet
-    const proxy = Gio.DBusProxy.new(
+    // Promisified at the top of this file, the types do not know it.
+    const proxy = /** @type {any} */ (Gio.DBusProxy).new(
         Gio.DBus.session,
         Gio.DBusProxyFlags.NONE,
         ifaceInfo,

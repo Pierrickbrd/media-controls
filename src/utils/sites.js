@@ -90,7 +90,9 @@ export const getPlayerHost = (player) => {
  * @returns {boolean}
  */
 const isValidHost = (host) =>
-    host.length <= 253 && /^[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63})+$/.test(host) && host.split(".").every((label) => !label.startsWith("-"));
+    host.length <= 253 &&
+    /^[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63})+$/.test(host) &&
+    host.split(".").every((label) => !label.startsWith("-"));
 
 /**
  * Chromium-based browsers do not publish the page URL over MPRIS. Their window title is
@@ -442,7 +444,8 @@ const decodeEntities = (text) =>
  * @param {number} code
  * @returns {string}
  */
-const toCharacter = (code) => (code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) ? String.fromCodePoint(code) : "");
+const toCharacter = (code) =>
+    code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) ? String.fromCodePoint(code) : "";
 
 /**
  * GET limited to maxBytes. Redirects are followed by hand so that every hop is checked.

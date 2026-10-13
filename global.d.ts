@@ -33,3 +33,14 @@ declare module "@girs/gobject-2.0" {
         function type_from_name(name: string | null): GType | 0;
     }
 }
+
+// Added to every GObject by GNOME Shell (misc/signalTracker.js). Declared where
+// GObject.Object itself is, so that the interface merges with the class.
+declare module "@girs/gobject-2.0/gobject-2.0" {
+    namespace GObject {
+        interface Object {
+            connectObject(...args: any[]): number;
+            disconnectObject(...args: any[]): void;
+        }
+    }
+}

@@ -119,7 +119,8 @@ export default class AudioStreams {
             this.seen.add(pid);
         }
         const changed =
-            streams.size !== this.streams.size || [...streams].some(([pid, audible]) => this.streams.get(pid) !== audible);
+            streams.size !== this.streams.size ||
+            [...streams].some(([pid, audible]) => this.streams.get(pid) !== audible);
         this.streams = streams;
         if (changed) {
             this.onChange();

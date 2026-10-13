@@ -15,7 +15,7 @@ import St from "gi://St";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import { gettext as _ } from "resource:///org/gnome/shell/extensions/extension.js";
-import * as Config from 'resource:///org/gnome/shell/misc/config.js';
+import * as Config from "resource:///org/gnome/shell/misc/config.js";
 
 import ScrollingLabel from "./ScrollingLabel.js";
 import MenuSlider from "./MenuSlider.js";
@@ -62,7 +62,8 @@ const COVER_SIDE_MARGIN = 12;
 /** @extends PanelMenu.Button */
 class PanelButton extends PanelMenu.Button {
     /**
-     * @private
+     * Read by the extension to know which player the button shows.
+     * @public
      * @type {PlayerProxy}
      */
     playerProxy;
@@ -391,7 +392,7 @@ class PanelButton extends PanelMenu.Button {
                 });
                 this.menuPlayersTextBoxPin.add_action(pinClickAction);
             } else {
-                const pinClickAction = new Clutter.ClickAction();
+                const pinClickAction = new /** @type {any} */ (Clutter).ClickAction();
                 pinClickAction.connect("clicked", () => {
                     if (this.playerProxy.isPlayerPinned()) {
                         this.playerProxy.unpinPlayer();
@@ -473,7 +474,7 @@ class PanelButton extends PanelMenu.Button {
                         });
                         icon.add_action(clickAction);
                     } else {
-                        const clickAction = new Clutter.ClickAction();
+                        const clickAction = new /** @type {any} */ (Clutter).ClickAction();
                         clickAction.connect("clicked", () => {
                             this.updateProxy(player);
                         });
@@ -811,7 +812,7 @@ class PanelButton extends PanelMenu.Button {
             });
             icon.add_action(clickGesture);
         } else {
-            const clickAction = new Clutter.ClickAction();
+            const clickAction = new /** @type {any} */ (Clutter).ClickAction();
             clickAction.connect("clicked", () => {
                 onClick();
             });
@@ -994,7 +995,7 @@ class PanelButton extends PanelMenu.Button {
             });
             icon.add_action(clickAction);
         } else {
-            const clickAction = new Clutter.ClickAction();
+            const clickAction = new /** @type {any} */ (Clutter).ClickAction();
             clickAction.connect("clicked", () => {
                 onClick();
             });

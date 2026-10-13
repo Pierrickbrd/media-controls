@@ -117,7 +117,7 @@ export default class PlayerProxy {
                 this.mprisPlayerProxy.set_cached_property(property, value);
                 this.callOnChangedListeners(
                     /** @type {KeysOf<PlayerProxyProperties>} */ (property),
-                    value.recursiveUnpack(),
+                    /** @type {any} */ (value.recursiveUnpack()),
                 );
             }
         });
@@ -182,8 +182,10 @@ export default class PlayerProxy {
                         return;
                     }
 
-                    const unpackedPosition = positionVariant[0].recursiveUnpack();
-                    const unpackedMetadata = metadataVariant[0].recursiveUnpack();
+                    const unpackedPosition = /** @type {number} */ (positionVariant[0].recursiveUnpack());
+                    const unpackedMetadata = /** @type {MprisPlayerInterfaceMetadataUnpacked} */ (
+                        metadataVariant[0].recursiveUnpack()
+                    );
                     if (unpackedPosition > 0 && unpackedMetadata["mpris:length"] > 0) {
                         this.mprisPlayerProxy.set_cached_property("Position", positionVariant[0]);
                         this.mprisPlayerProxy.set_cached_property("Metadata", metadataVariant[0]);

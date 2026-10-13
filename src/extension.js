@@ -758,6 +758,7 @@ export default class MediaControls extends Extension {
      */
     isPlayerBlacklisted(id, entry) {
         // Standard AppInfo lookup (fastest)
+        /** @type {Gio.AppInfo | Shell.App | null} */
         let app = getAppInfoByIdAndEntry(id, entry);
 
         // Shell AppSystem lookup
@@ -794,21 +795,25 @@ export default class MediaControls extends Extension {
      * @returns {void}
      */
     updateMediaNotificationVisiblity(shouldReset = false) {
-        const MprisSource = Mpris.MprisSource ?? Mpris.MediaSection;
-        const mediaSource =
-            Main.panel.statusArea.dateMenu._messageList._messageView?._mediaSource ??
-            Main.panel.statusArea.dateMenu._messageList._mediaSection;
+        // MediaSection and _mediaSection are the names before GNOME 46.
+        const MprisSource = Mpris.MprisSource ?? /** @type {any} */ (Mpris).MediaSection;
+        /** @type {any} */
+        const messageList = Main.panel.statusArea.dateMenu._messageList;
+        const mediaSource = messageList._messageView?._mediaSource ?? messageList._mediaSection;
+        // _addPlayer is private to the shell: patched on purpose to hide its media notification.
+        /** @type {any} */
+        const sourcePrototype = MprisSource.prototype;
 
         if (shouldReset || this.hideMediaNotification === false) {
             if (this.mediaSectionAddFunc) {
-                MprisSource.prototype._addPlayer = this.mediaSectionAddFunc;
+                sourcePrototype._addPlayer = this.mediaSectionAddFunc;
                 this.mediaSectionAddFunc = null;
                 mediaSource._onProxyReady();
             }
         } else if (this.mediaSectionAddFunc == null) {
             // Only once: a second call would save the empty function over the real one.
-            this.mediaSectionAddFunc = MprisSource.prototype._addPlayer;
-            MprisSource.prototype._addPlayer = function () {};
+            this.mediaSectionAddFunc = sourcePrototype._addPlayer;
+            sourcePrototype._addPlayer = function () {};
             if (mediaSource._players != null) {
                 for (const player of mediaSource._players.values()) {
                     mediaSource._onNameOwnerChanged(null, null, [player._busName, player._busName, ""]);

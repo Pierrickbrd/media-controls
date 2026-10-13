@@ -7,11 +7,13 @@ export const debugLog = (...args) => {
 };
 
 /**
+ * Returns null, so that `promise.catch(errorLog)` resolves to the value or null.
  * @param {...unknown} [args]
- * @returns {void}
+ * @returns {null}
  */
 export const errorLog = (...args) => {
     console.error("[Media Controls]", ...args);
+    return null;
 };
 
 /**

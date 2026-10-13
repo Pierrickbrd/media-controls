@@ -72,7 +72,7 @@ export default class MediaControlsPreferences extends ExtensionPreferences {
 
     /**
      * @public
-     * @param {Adw.PreferencesWindow} window
+     * @param {Parameters<ExtensionPreferences["fillPreferencesWindow"]>[0]} window
      * @returns {Promise<void>}
      */
     async fillPreferencesWindow(window) {
