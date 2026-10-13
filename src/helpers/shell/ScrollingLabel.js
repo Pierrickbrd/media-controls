@@ -15,6 +15,7 @@ import { debugLog } from "../../utils/common.js";
  * @property {boolean} initPaused
  * @property {number} [scrollSpeed]
  * @property {number} [scrollPauseTime]
+ * @property {boolean} [scrollOnce] Scroll one cycle, then rest until replayScrolling
  */
 
 /** @extends St.ScrollView */
@@ -88,11 +89,26 @@ class ScrollingLabel extends St.ScrollView {
             direction: Clutter.TimelineDirection.FORWARD,
             isFixedWidth: true,
             scrollPauseTime: 0,
+            scrollOnce: true,
         };
-        const { text, width, direction, isFixedWidth, isScrolling, initPaused, scrollSpeed, scrollPauseTime } = {
+        const {
+            text,
+            width,
+            direction,
+            isFixedWidth,
+            isScrolling,
+            initPaused,
+            scrollSpeed,
+            scrollPauseTime,
+            scrollOnce,
+        } = {
             ...defaultParams,
             ...params,
         };
+        this.scrollOnce = scrollOnce;
+        this.isResting = false;
+        this.plainText = text;
+        this.scrollingText = text;
         this.scrollPauseTime = scrollPauseTime;
         this.isScrolling = isScrolling;
         this.isFixedWidth = isFixedWidth;
@@ -133,8 +149,48 @@ class ScrollingLabel extends St.ScrollView {
      * @returns {void}
      */
     resumeScrolling() {
-        this.transition?.start();
         this.initPaused = false;
+        if (this.isResting) {
+            this.replayScrolling();
+        } else {
+            this.transition?.start();
+        }
+    }
+
+    /**
+     * Scrolls one more cycle when the label rests on its beginning.
+     * @public
+     * @returns {void}
+     */
+    replayScrolling() {
+        const adjustment = this.get_hadjustment();
+        if (this.isResting === false || this.transition == null || adjustment == null || this.initPaused) {
+            return;
+        }
+        this.isResting = false;
+        this.label.width = -1;
+        this.label.clutterText.ellipsize = Pango.EllipsizeMode.NONE;
+        this.label.text = this.scrollingText;
+        adjustment.value = 0;
+        adjustment.add_transition("scroll", this.transition);
+    }
+
+    /**
+     * After one cycle, the label stops on the beginning of the text, ellipsized: a scrolling
+     * label redraws the screen at every frame, for as long as it scrolls.
+     * @private
+     * @returns {void}
+     */
+    restScrolling() {
+        const adjustment = this.get_hadjustment();
+        adjustment?.remove_transition("scroll");
+        if (adjustment != null) {
+            adjustment.value = 0;
+        }
+        this.isResting = true;
+        this.label.text = this.plainText;
+        this.label.clutterText.ellipsize = Pango.EllipsizeMode.END;
+        this.label.width = this.box.width > 0 ? this.box.width : this.labelWidth;
     }
 
     /**
@@ -189,6 +245,7 @@ class ScrollingLabel extends St.ScrollView {
      */
     initScrolling() {
         const adjustment = this.get_hadjustment();
+        this.plainText = this.label.text;
         const origText = this.label.text + "     ";
 
         // Clean up any existing handler first
@@ -274,6 +331,7 @@ class ScrollingLabel extends St.ScrollView {
             interval,
         });
         this.label.text = `${origText} ${origText}`;
+        this.scrollingText = this.label.text;
 
         // Disconnect the adjustment changed handler if it's still connected
         if (this.onAdjustmentChangedId != null) {
@@ -283,6 +341,10 @@ class ScrollingLabel extends St.ScrollView {
 
         this.transition.connect("completed", () => {
             this.transition.rewind(); // Snap back to 0
+            if (this.scrollOnce) {
+                this.restScrolling();
+                return;
+            }
 
             if (this.scrollPauseTime > 0) {
                 if (this.cyclePauseTimerId != null) {

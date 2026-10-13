@@ -204,6 +204,20 @@ class PanelButton extends PanelMenu.Button {
         // @ts-expect-error
         this.menu.box.add_style_class_name("popup-menu-container");
         this.connect("destroy", this.onDestroy.bind(this));
+        // Labels scroll one cycle, then rest: hovering the button or opening the menu
+        // scrolls them again.
+        this.connect("notify::hover", () => {
+            if (this.hover) {
+                this.buttonLabel?.replayScrolling();
+            }
+        });
+        // @ts-expect-error The menu type misses this signal
+        this.menu.connect("open-state-changed", (_, isOpen) => {
+            if (isOpen) {
+                this.menuLabelTitle?.replayScrolling();
+                this.menuLabelSubtitle?.replayScrolling();
+            }
+        });
     }
 
     /**
