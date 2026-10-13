@@ -12,8 +12,10 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 
 import PanelButton from "./helpers/shell/PanelButton.js";
 import PlayerProxy from "./helpers/shell/PlayerProxy.js";
+import AudioStreams from "./utils/audio.js";
+import { clearSites, isBrowserPlayer } from "./utils/sites.js";
 import { debugLog, enumValueByIndex, errorLog } from "./utils/common.js";
-import { getAppInfoByIdAndEntry, getAppByIdAndEntry, createDbusProxy } from "./utils/shell_only.js";
+import { getAppInfoByIdAndEntry, getAppByIdAndEntry, createDbusProxy, pruneArtCache } from "./utils/shell_only.js";
 import {
     PlaybackStatus,
     WidgetFlags,
@@ -29,6 +31,9 @@ import {
 /** @typedef {(KeysOf<typeof LabelTypes> | (string & NonNullable<unknown>))[]} LabelsOrder */
 
 Gio._promisify(Gio.File.prototype, "load_contents_async", "load_contents_finish");
+
+/** Time given to a player's audio stream to open before it can be judged muted. */
+const MUTED_GRACE_MS = 2000;
 
 export default class MediaControls extends Extension {
     /**
@@ -216,6 +221,16 @@ export default class MediaControls extends Extension {
      * @type {InstanceType<typeof PanelButton>}
      */
     panelBtn;
+    /**
+     * @private
+     * @type {AudioStreams | null}
+     */
+    audio = null;
+    /**
+     * @private
+     * @type {number}
+     */
+    mutedCheckSourceId = 0;
 
     /**
      * @private
@@ -268,6 +283,11 @@ export default class MediaControls extends Extension {
         this.initSettings();
         this.initProxies().catch(errorLog);
         this.updateMediaNotificationVisiblity();
+        pruneArtCache().catch(errorLog);
+        this.audio = new AudioStreams(() => {
+            this.setActivePlayer();
+            this.panelBtn?.updateWidgets(WidgetFlags.MENU_PLAYERS);
+        });
         Main.wm.addKeybinding(
             "mediacontrols-show-popup-menu",
             this.settings,
@@ -285,6 +305,17 @@ export default class MediaControls extends Extension {
      * @returns {void}
      */
     disable() {
+        this.audio?.destroy();
+        this.audio = null;
+        if (this.mutedCheckSourceId) {
+            GLib.source_remove(this.mutedCheckSourceId);
+            this.mutedCheckSourceId = 0;
+        }
+        // Stops the players' polling timers and the favicon downloads still running.
+        for (const playerProxy of this.playerProxies?.values() ?? []) {
+            playerProxy.onDestroy();
+        }
+        clearSites();
         this.playerProxies = null;
         this.destroySettings();
         this.watchIfaceInfo = null;
@@ -305,7 +336,7 @@ export default class MediaControls extends Extension {
     getPlayers() {
         const players = [];
         for (const player of this.playerProxies.values()) {
-            if (player.isInvalid) {
+            if (player.isInvalid || this.isPlayerMuted(player)) {
                 continue;
             }
             players.push(player);
@@ -579,7 +610,11 @@ export default class MediaControls extends Extension {
                 return;
             }
             playerProxy.onChanged("IsPinned", this.setActivePlayer.bind(this));
-            playerProxy.onChanged("PlaybackStatus", this.setActivePlayer.bind(this));
+            playerProxy.onChanged("PlaybackStatus", () => {
+                this.onPlaybackStarted(playerProxy);
+                this.setActivePlayer();
+            });
+            this.onPlaybackStarted(playerProxy);
             playerProxy.onChanged("IsInvalid", () => {
                 this.setActivePlayer();
                 this.panelBtn?.updateWidgets(WidgetFlags.MENU_PLAYERS);
@@ -589,6 +624,59 @@ export default class MediaControls extends Extension {
         } catch (e) {
             errorLog("Failed to add player:", busName, e);
         }
+    }
+
+    /**
+     * A muted player says it plays but makes no sound: Firefox closes its audio stream,
+     * Spotify at volume 0 or an app muted in the mixer keeps a silent one. Chromium does
+     * not even publish muted media.
+     * @private
+     * @param {PlayerProxy} player
+     * @returns {boolean}
+     */
+    isPlayerMuted(player) {
+        if (this.audio == null || this.audio.isAvailable() === false || player.pid == null) {
+            return false;
+        }
+        // Paused players have no stream to look at: keep what was seen while playing.
+        if (player.playbackStatus !== PlaybackStatus.PLAYING) {
+            return player.wasMuted;
+        }
+        const audible = this.audio.isAudible(player.pid);
+        if (audible != null) {
+            player.wasMuted = audible === false;
+        } else {
+            // No stream at all only means muted for a browser whose streams have been seen
+            // before, once the stream had time to open.
+            const settled = GLib.get_monotonic_time() - player.playingSince > MUTED_GRACE_MS * 1000;
+            player.wasMuted = settled && isBrowserPlayer(player) && this.audio.hasBeenSeen(player.pid);
+        }
+        return player.wasMuted;
+    }
+
+    /**
+     * @private
+     * @param {PlayerProxy} player
+     * @returns {void}
+     */
+    onPlaybackStarted(player) {
+        if (player.playbackStatus !== PlaybackStatus.PLAYING) {
+            return;
+        }
+        player.playingSince = GLib.get_monotonic_time();
+        this.audio?.scheduleRefresh();
+        if (this.mutedCheckSourceId) {
+            GLib.source_remove(this.mutedCheckSourceId);
+        }
+        // Looks again once the grace period is over.
+        this.mutedCheckSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, MUTED_GRACE_MS + 100, () => {
+            this.mutedCheckSourceId = 0;
+            if (this.playerProxies != null) {
+                this.setActivePlayer();
+                this.panelBtn?.updateWidgets(WidgetFlags.MENU_PLAYERS);
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     /**
@@ -617,7 +705,7 @@ export default class MediaControls extends Extension {
         }
         let chosenPlayer = null;
         for (const [, playerProxy] of this.playerProxies) {
-            if (playerProxy.isInvalid) {
+            if (playerProxy.isInvalid || this.isPlayerMuted(playerProxy)) {
                 continue;
             }
             if (playerProxy.isPlayerPinned()) {
@@ -711,11 +799,14 @@ export default class MediaControls extends Extension {
             Main.panel.statusArea.dateMenu._messageList._messageView?._mediaSource ??
             Main.panel.statusArea.dateMenu._messageList._mediaSection;
 
-        if (this.mediaSectionAddFunc && (shouldReset || this.hideMediaNotification === false)) {
-            MprisSource.prototype._addPlayer = this.mediaSectionAddFunc;
-            this.mediaSectionAddFunc = null;
-            mediaSource._onProxyReady();
-        } else {
+        if (shouldReset || this.hideMediaNotification === false) {
+            if (this.mediaSectionAddFunc) {
+                MprisSource.prototype._addPlayer = this.mediaSectionAddFunc;
+                this.mediaSectionAddFunc = null;
+                mediaSource._onProxyReady();
+            }
+        } else if (this.mediaSectionAddFunc == null) {
+            // Only once: a second call would save the empty function over the real one.
             this.mediaSectionAddFunc = MprisSource.prototype._addPlayer;
             MprisSource.prototype._addPlayer = function () {};
             if (mediaSource._players != null) {
@@ -737,7 +828,22 @@ export default class MediaControls extends Extension {
         if (playerProxy == null) {
             return;
         }
-        this.panelBtn = new PanelButton(playerProxy, this);
+        const panelBtn = new PanelButton(playerProxy, this);
+        // The shell can destroy the button on its own (seen at login): forget it and rebuild
+        // one, instead of updating a destroyed button on the next player change.
+        panelBtn.connect("destroy", () => {
+            if (this.panelBtn !== panelBtn) {
+                return;
+            }
+            this.panelBtn = null;
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                if (this.playerProxies != null && this.panelBtn == null) {
+                    this.setActivePlayer();
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+        this.panelBtn = panelBtn;
         Main.panel.addToStatusArea("Media Controls", this.panelBtn, this.extensionIndex, this.extensionPosition);
     }
 
@@ -747,8 +853,9 @@ export default class MediaControls extends Extension {
      */
     removePanelButton() {
         debugLog("Removing panel button");
-        this.panelBtn?.destroy();
+        const panelBtn = this.panelBtn;
         this.panelBtn = null;
+        panelBtn?.destroy();
     }
 
     /**

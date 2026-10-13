@@ -98,3 +98,36 @@
 .popup-menu-control-icon:hover {
     background-color: rgba(160, 160, 160, 0.25);
 }
+
+/* Same radius as the menu items of the shell theme. */
+.popup-menu-cover {
+    border-radius: 12px;
+    background-size: cover;
+    background-position: center;
+}
+
+.popup-menu-cover-placeholder {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+.popup-menu-control-icon {
+    icon-size: 22px;
+}
+
+.popup-menu-control-icon#playpausestop {
+    icon-size: 30px;
+}
+
+.popup-menu-pin-icon {
+    icon-size: 18px;
+}
+
+.popup-menu-player-icons-icon {
+    icon-size: 20px;
+}
+
+/* Same side margins as the video thumbnails (COVER_SIDE_MARGIN). */
+.popup-menu-slider {
+    margin-left: 12px;
+    margin-right: 12px;
+}

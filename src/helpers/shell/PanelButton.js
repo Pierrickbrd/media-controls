@@ -20,7 +20,10 @@ import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import ScrollingLabel from "./ScrollingLabel.js";
 import MenuSlider from "./MenuSlider.js";
 import { debugLog, errorLog } from "../../utils/common.js";
-import { getAppByIdAndEntry, getImage } from "../../utils/shell_only.js";
+import { getAppByIdAndEntry, getAppByPid, getChromiumSnapImage, getImage } from "../../utils/shell_only.js";
+import { getBundledIcon } from "../../utils/icons.js";
+import { decodeImage, readStream } from "../../utils/images.js";
+import { getPlayerHost, getSite, getVideoThumbnailUrl } from "../../utils/sites.js";
 import { ControlIconOptions } from "../../types/enums/shell_only.js";
 import {
     LabelTypes,
@@ -31,7 +34,6 @@ import {
     WidgetFlags,
 } from "../../types/enums/common.js";
 
-Gio._promisify(GdkPixbuf.Pixbuf, "new_from_stream_async", "new_from_stream_finish");
 Gio._promisify(Gio.File.prototype, "query_info_async", "query_info_finish");
 
 /**
@@ -47,6 +49,15 @@ function find_child_by_name(parent, name) {
         }
     }
 }
+
+/** Width of the popup content: wide enough for a video thumbnail to make the popup almost square. */
+const MENU_CONTENT_WIDTH = 380;
+/** Highest cover, relative to the content width. */
+const MAX_COVER_RATIO = 0.75;
+/** Covers are read whole before decoding: no more than this. */
+const MAX_COVER_BYTES = 10 * 1024 * 1024;
+/** Space kept on each side of a video thumbnail. */
+const COVER_SIDE_MARGIN = 12;
 
 /** @extends PanelMenu.Button */
 class PanelButton extends PanelMenu.Button {
@@ -94,9 +105,19 @@ class PanelButton extends PanelMenu.Button {
     menuPlayers;
     /**
      * @private
-     * @type {St.Icon}
+     * @type {St.Bin}
      */
     menuImage;
+    /**
+     * @private
+     * @type {number}
+     */
+    menuImageRequest = 0;
+    /**
+     * @private
+     * @type {string | null}
+     */
+    coverPath = null;
     /**
      * @private
      * @type {St.BoxLayout}
@@ -160,6 +181,11 @@ class PanelButton extends PanelMenu.Button {
      * @type {Map<KeysOf<PlayerProxyProperties>, number>}
      */
     changeListenerIds;
+    /**
+     * @private
+     * @type {(() => void) | null}
+     */
+    disconnectSeeked = null;
 
     /**
      * @param {PlayerProxy} playerProxy
@@ -220,6 +246,9 @@ class PanelButton extends PanelMenu.Button {
      * @returns {void}
      */
     updateWidgets(flags) {
+        if (this.playerProxy == null) {
+            return;
+        }
         if (this.buttonBox == null) {
             this.buttonBox = new St.BoxLayout({
                 styleClass: "panel-button-box",
@@ -338,8 +367,7 @@ class PanelButton extends PanelMenu.Button {
         }
         if (this.menuPlayersTextBoxPin == null) {
             this.menuPlayersTextBoxPin = new St.Icon({
-                iconName: "view-pin-symbolic",
-                styleClass: "popup-menu-icon",
+                styleClass: "popup-menu-icon popup-menu-pin-icon",
                 yAlign: Clutter.ActorAlign.END,
                 xAlign: Clutter.ActorAlign.START,
                 yExpand: true,
@@ -388,16 +416,15 @@ class PanelButton extends PanelMenu.Button {
             this.menuPlayerIcons.get_children().forEach((child) => child.destroy());
         }
         const isPinned = this.playerProxy.isPlayerPinned();
+        this.menuPlayersTextBoxPin.gicon = getBundledIcon(isPinned ? "pin-filled" : "pin");
         this.menuPlayersTextBoxPin.opacity = isPinned ? 255 : 160;
         if (this.menuPlayerIcons != null) {
             this.menuPlayerIcons.opacity = isPinned ? 160 : 255;
         }
         for (let i = 0; i < players.length; i++) {
             const player = players[i];
-            const app = getAppByIdAndEntry(player.identity, player.desktopEntry);
             const isSamePlayer = this.isSamePlayer(player);
-            const appName = app?.get_name() ?? (player.identity || _("Unknown player"));
-            const appIcon = app?.get_icon() ?? Gio.Icon.new_for_string("audio-x-generic-symbolic");
+            const { name: appName, gicon: appIcon } = this.getPlayerDisplay(player);
             if (isSamePlayer) {
                 this.menuPlayersTextBoxLabel.text = appName;
                 if (this.menuPlayersTextBoxIcon?.get_parent() != null) {
@@ -472,19 +499,30 @@ class PanelButton extends PanelMenu.Button {
     }
 
     /**
+     * Cover drawn as a background image: St clips those to the border radius, not icons.
      * @private
      * @returns {Promise<void>}
      */
     async addMenuImage() {
         if (this.menuImage == null) {
-            this.menuImage = new St.Icon({
+            this.menuImage = new St.Bin({
+                styleClass: "popup-menu-cover",
                 xExpand: false,
                 yExpand: false,
                 xAlign: Clutter.ActorAlign.CENTER,
             });
         }
-        let artSet = false;
-        let stream = await getImage(this.playerProxy.metadata["mpris:artUrl"]);
+        const request = ++this.menuImageRequest;
+        // Without artwork, the site or application logo stands in for it.
+        let fallbackIcon = this.getPlayerDisplay(this.playerProxy).gicon;
+        let stream = null;
+        const thumbnailUrl = getVideoThumbnailUrl(this.playerProxy);
+        if (thumbnailUrl != null) {
+            // One per video: kept off the disk, it would make a viewing history.
+            stream = await getImage(thumbnailUrl, false);
+        }
+        stream ??= await getImage(this.playerProxy.metadata["mpris:artUrl"], this.extension.cacheArt);
+        stream ??= await getChromiumSnapImage(this.playerProxy.metadata["mpris:artUrl"]);
         if (stream == null && this.playerProxy.metadata["xesam:url"] != null) {
             const trackUri = GLib.uri_parse(this.playerProxy.metadata["xesam:url"], GLib.UriFlags.NONE);
             if (trackUri != null && trackUri.get_scheme() === "file") {
@@ -500,7 +538,7 @@ class PanelButton extends PanelMenu.Button {
                 if (info != null) {
                     const path = info.get_attribute_byte_string(Gio.FILE_ATTRIBUTE_THUMBNAIL_PATH);
                     if (path == null) {
-                        this.menuImage.gicon = info.get_icon();
+                        fallbackIcon = info.get_icon();
                     } else {
                         const thumb = Gio.File.new_for_path(path);
                         stream = await getImage(thumb.get_uri());
@@ -508,37 +546,88 @@ class PanelButton extends PanelMenu.Button {
                 }
             }
         }
-        const width = this.getMenuItemWidth();
+        /** @type {GdkPixbuf.Pixbuf | null} */
+        let pixbuf = null;
         if (stream != null) {
-            /** @type {Promise<GdkPixbuf.Pixbuf>} */
-            const pixbufPromise = /** @type {any} */ (GdkPixbuf.Pixbuf.new_from_stream_async(stream, null));
-            const pixbuf = await pixbufPromise.catch(errorLog);
-            if (pixbuf != null) {
-                const aspectRatio = pixbuf.width / pixbuf.height;
-                const height = width / aspectRatio;
-                const [success, buffer] = pixbuf.save_to_bufferv("png", [], []);
-                if (success) {
-                    const bytes = GLib.Bytes.new(buffer);
-                    const icon = Gio.BytesIcon.new(bytes);
-                    this.menuImage.content = null;
-                    this.menuImage.gicon = icon;
-                    this.menuImage.iconSize = width;
-                    this.menuImage.width = width;
-                    this.menuImage.height = height;
-                    artSet = true;
-                }
-            }
+            const bytes = await readStream(stream, MAX_COVER_BYTES);
+            pixbuf = bytes == null ? null : decodeImage(bytes);
         }
-        if (artSet === false) {
-            this.menuImage.content = null;
-            this.menuImage.gicon = Gio.ThemedIcon.new("audio-x-generic-symbolic");
-            this.menuImage.width = width;
-            this.menuImage.height = width;
-            this.menuImage.iconSize = width;
+        // A newer track arrived while this one was loading, or the button is gone.
+        if (request !== this.menuImageRequest || this.menuImage == null) {
+            return;
+        }
+        const width = this.getMenuItemWidth();
+        const coverPath = pixbuf == null ? null : this.saveCover(pixbuf);
+        const maxWidth = width - 2 * COVER_SIDE_MARGIN;
+        const maxHeight = Math.round(width * MAX_COVER_RATIO);
+        if (coverPath != null) {
+            // Video thumbnails fill the width, square and tall covers are capped in height.
+            const aspectRatio = pixbuf.width / pixbuf.height;
+            const height = Math.min(Math.round(maxWidth / aspectRatio), maxHeight);
+            this.menuImage.set_child(null);
+            this.menuImage.remove_style_class_name("popup-menu-cover-placeholder");
+            this.menuImage.style = `background-image: url("${GLib.filename_to_uri(coverPath, null)}");`;
+            this.menuImage.set_size(Math.round(height * aspectRatio), height);
+        } else {
+            this.menuImage.style = null;
+            this.menuImage.add_style_class_name("popup-menu-cover-placeholder");
+            this.menuImage.set_child(
+                new St.Icon({
+                    gicon: fallbackIcon,
+                    iconSize: Math.round(maxHeight / 3),
+                    xAlign: Clutter.ActorAlign.CENTER,
+                    yAlign: Clutter.ActorAlign.CENTER,
+                    xExpand: true,
+                    yExpand: true,
+                }),
+            );
+            this.menuImage.set_size(maxHeight, maxHeight);
+        }
+        if (coverPath !== this.coverPath) {
+            this.removeCoverFile();
+            this.coverPath = coverPath;
         }
         if (this.menuImage.get_parent() == null) {
             this.menuBox.insert_child_above(this.menuImage, this.menuPlayers);
             debugLog("Added menu image");
+        }
+    }
+
+    /**
+     * Writes the cover where St can load it. Each image gets its own name: St caches
+     * background images by path and would keep showing the previous cover.
+     * @private
+     * @param {GdkPixbuf.Pixbuf} pixbuf
+     * @returns {string | null}
+     */
+    saveCover(pixbuf) {
+        const [success, buffer] = pixbuf.save_to_bufferv("png", [], []);
+        if (success === false) {
+            return null;
+        }
+        const checksum = GLib.compute_checksum_for_data(GLib.ChecksumType.MD5, buffer);
+        const dir = GLib.build_filenamev([GLib.get_user_runtime_dir(), "mediacontrols"]);
+        const path = GLib.build_filenamev([dir, `cover-${checksum}.png`]);
+        try {
+            GLib.mkdir_with_parents(dir, 0o700);
+            if (GLib.file_test(path, GLib.FileTest.EXISTS) === false) {
+                GLib.file_set_contents(path, buffer);
+            }
+            return path;
+        } catch (error) {
+            errorLog("Failed to save cover", error);
+            return null;
+        }
+    }
+
+    /**
+     * @private
+     * @returns {void}
+     */
+    removeCoverFile() {
+        if (this.coverPath != null) {
+            GLib.unlink(this.coverPath);
+            this.coverPath = null;
         }
     }
 
@@ -599,6 +688,8 @@ class PanelButton extends PanelMenu.Button {
         const rate = this.playerProxy.rate;
         if (this.menuSlider == null) {
             this.menuSlider = new MenuSlider();
+            // Lined up with the video thumbnails.
+            this.menuSlider.add_style_class_name("popup-menu-slider");
             this.menuSlider.connect("seeked", (_, position) => {
                 this.playerProxy.setPosition(this.playerProxy.metadata["mpris:trackid"], position);
             });
@@ -679,7 +770,7 @@ class PanelButton extends PanelMenu.Button {
         }
         if (flags & WidgetFlags.MENU_CONTROLS_SHUFFLE) {
             this.addMenuControlIcon(
-                this.playerProxy.shuffle ? ControlIconOptions.SHUFFLE_OFF : ControlIconOptions.SHUFFLE_ON,
+                this.playerProxy.shuffle ? ControlIconOptions.SHUFFLE_ON : ControlIconOptions.SHUFFLE_OFF,
                 this.playerProxy.shuffle != null,
                 this.playerProxy.toggleShuffle.bind(this.playerProxy),
             );
@@ -700,7 +791,7 @@ class PanelButton extends PanelMenu.Button {
     addMenuControlIcon(options, reactive, onClick) {
         const icon = new St.Icon({
             name: options.name,
-            iconName: options.iconName,
+            gicon: getBundledIcon(options.icon),
             styleClass: "popup-menu-icon popup-menu-control-icon",
             trackHover: reactive,
             opacity: reactive ? 255 : 160,
@@ -741,8 +832,7 @@ class PanelButton extends PanelMenu.Button {
      * @returns {void}
      */
     addButtonIcon(index) {
-        const app = getAppByIdAndEntry(this.playerProxy.identity, this.playerProxy.desktopEntry);
-        const appIcon = app?.get_icon() ?? Gio.Icon.new_for_string("audio-x-generic-symbolic");
+        const { gicon: appIcon } = this.getPlayerDisplay(this.playerProxy);
         const coloredClass = this.extension.coloredPlayerIcon ? "colored-icon" : "symbolic-icon";
         const icon = new St.Icon({
             gicon: appIcon,
@@ -886,7 +976,7 @@ class PanelButton extends PanelMenu.Button {
 
         const icon = new St.Icon({
             name: options.name,
-            iconName: options.iconName,
+            gicon: getBundledIcon(options.icon),
             styleClass: "system-status-icon no-margin",
             opacity: reactive ? 255 : 160,
             reactive,
@@ -933,6 +1023,33 @@ class PanelButton extends PanelMenu.Button {
     }
 
     /**
+     * Name and icon shown for a player: the website for a browser, the application otherwise.
+     * @private
+     * @param {PlayerProxy} player
+     * @returns {{ name: string, gicon: Gio.Icon }}
+     */
+    getPlayerDisplay(player) {
+        const site = getSite(
+            getPlayerHost(player),
+            () => {
+                if (this.playerProxy != null) {
+                    // The cover placeholder shows the site logo too.
+                    this.updateWidgets(WidgetFlags.PANEL_ICON | WidgetFlags.MENU_PLAYERS | WidgetFlags.MENU_IMAGE);
+                }
+            },
+            player.metadata?.["xesam:url"],
+        );
+        if (site != null) {
+            return site;
+        }
+        const app = getAppByPid(player.pid) ?? getAppByIdAndEntry(player.identity, player.desktopEntry);
+        return {
+            name: app?.get_name() ?? (player.identity || _("Unknown player")),
+            gicon: app?.get_icon() ?? getBundledIcon("music-note"),
+        };
+    }
+
+    /**
      * @private
      * @returns {string}
      */
@@ -964,7 +1081,7 @@ class PanelButton extends PanelMenu.Button {
         // @ts-expect-error
         const menuContainer = this.menu.box.get_parent().get_parent();
         const minWidth = menuContainer.get_theme_node().get_min_width() - 24;
-        return Math.max(minWidth, this.extension.labelWidth);
+        return Math.max(minWidth, MENU_CONTENT_WIDTH);
     }
 
     /**
@@ -974,7 +1091,12 @@ class PanelButton extends PanelMenu.Button {
     addProxyListeners() {
         this.addProxyListener("Metadata", () => {
             this.updateWidgets(
-                WidgetFlags.PANEL_LABEL | WidgetFlags.MENU_IMAGE | WidgetFlags.MENU_LABELS | WidgetFlags.MENU_SLIDER,
+                WidgetFlags.PANEL_ICON |
+                    WidgetFlags.PANEL_LABEL |
+                    WidgetFlags.MENU_PLAYERS |
+                    WidgetFlags.MENU_IMAGE |
+                    WidgetFlags.MENU_LABELS |
+                    WidgetFlags.MENU_SLIDER,
             );
         });
         this.addProxyListener("PlaybackStatus", () => {
@@ -1021,7 +1143,7 @@ class PanelButton extends PanelMenu.Button {
         this.addProxyListener("Rate", () => {
             this.menuSlider?.setRate(this.playerProxy.rate);
         });
-        this.playerProxy.onSeeked((position) => {
+        this.disconnectSeeked = this.playerProxy.onSeeked((position) => {
             this.menuSlider?.setPosition(position);
         });
     }
@@ -1034,6 +1156,9 @@ class PanelButton extends PanelMenu.Button {
         for (const [property, id] of this.changeListenerIds.entries()) {
             this.playerProxy.removeListener(property, id);
         }
+        this.changeListenerIds.clear();
+        this.disconnectSeeked?.();
+        this.disconnectSeeked = null;
     }
 
     /**
@@ -1192,6 +1317,7 @@ class PanelButton extends PanelMenu.Button {
      */
     onDestroy() {
         this.removeProxyListeners();
+        this.removeCoverFile();
         this.playerProxy = null;
         // Null out references to child widgets before parent destroys them
         this.menuSlider = null;

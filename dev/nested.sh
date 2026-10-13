@@ -21,6 +21,7 @@ exec dbus-run-session -- bash -c '
   dconf write /org/gnome/shell/enabled-extensions "[\"unsafe@dev\", \"user-theme@gnome-shell-extensions.gcampax.github.com\", \"'$UUID'\"]"
   dconf write /org/gnome/shell/disable-user-extensions false
   dconf load /org/gnome/shell/extensions/mediacontrols/ < "'$T'/mediacontrols.ini"
+  [ -n "${NESTED_DCONF:-}" ] && eval "$NESTED_DCONF"
   dconf write /org/gnome/shell/extensions/user-theme/name "\"Pierrick\""
   dconf write /org/gnome/desktop/interface/color-scheme "\"prefer-dark\""
   dconf write /org/gnome/desktop/interface/accent-color "\"blue\""

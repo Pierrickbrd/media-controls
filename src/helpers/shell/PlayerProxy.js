@@ -3,7 +3,7 @@
 /** @import { KeysOf } from '../../types/misc.js' */
 import { MPRIS_PLAYER_IFACE_NAME, MPRIS_OBJECT_PATH, LoopStatus } from "../../types/enums/common.js";
 import { errorLog } from "../../utils/common.js";
-import { createDbusProxy } from "../../utils/shell_only.js";
+import { createDbusProxy, getBusNamePid } from "../../utils/shell_only.js";
 
 import GLib from "gi://GLib";
 
@@ -12,7 +12,7 @@ import GLib from "gi://GLib";
 /**
  * @typedef {Map<
  *     KeysOf<PlayerProxyProperties>,
- *     ((value: PlayerProxyProperties[KeysOf<PlayerProxyProperties>]) => void)[]
+ *     Map<number, (value: PlayerProxyProperties[KeysOf<PlayerProxyProperties>]) => void>
  * >} PlayerProxyChangeListeners
  */
 
@@ -46,6 +46,11 @@ export default class PlayerProxy {
      * @private
      * @type {number}
      */
+    nextListenerId = 0;
+    /**
+     * @private
+     * @type {number}
+     */
     pollSourceId;
 
     /**
@@ -58,6 +63,24 @@ export default class PlayerProxy {
      * @type {boolean}
      */
     isInvalid;
+    /**
+     * Process that publishes the player, null when unknown.
+     * @public
+     * @type {number | null}
+     */
+    pid = null;
+    /**
+     * Monotonic time playback last started, to give audio streams time to open.
+     * @public
+     * @type {number}
+     */
+    playingSince = 0;
+    /**
+     * Whether the player was muted when last seen playing.
+     * @public
+     * @type {boolean}
+     */
+    wasMuted = false;
 
     /**
      * @param {string} busName
@@ -81,6 +104,7 @@ export default class PlayerProxy {
         const mprisPlayerProxy = createDbusProxy(mprisPlayerIface, this.busName, MPRIS_OBJECT_PATH).catch(errorLog);
         const propertiesProxy = createDbusProxy(propertiesIface, this.busName, MPRIS_OBJECT_PATH).catch(errorLog);
         const proxies = await Promise.all([mprisProxy, mprisPlayerProxy, propertiesProxy]).catch(errorLog);
+        this.pid = await getBusNamePid(this.busName);
         if (proxies == null) {
             errorLog("Failed to create proxies");
             return false;
@@ -228,7 +252,7 @@ export default class PlayerProxy {
         if (listeners == null) {
             return;
         }
-        for (const listener of listeners) {
+        for (const listener of [...listeners.values()]) {
             try {
                 listener(value);
             } catch (error) {
@@ -571,14 +595,12 @@ export default class PlayerProxy {
      * @returns {number}
      */
     onChanged(property, callback) {
-        const listeners = this.changeListeners.get(property);
-        let id;
-        if (listeners == null) {
-            id = 0;
-            this.changeListeners.set(property, [callback]);
-        } else {
-            id = listeners.push(callback);
+        // Ids must stay valid after other listeners are removed: never derive them from positions.
+        const id = this.nextListenerId++;
+        if (this.changeListeners.has(property) === false) {
+            this.changeListeners.set(property, new Map());
         }
+        this.changeListeners.get(property).set(id, callback);
         return id;
     }
 
@@ -590,11 +612,7 @@ export default class PlayerProxy {
      * @returns {void}
      */
     removeListener(property, id) {
-        const listeners = this.changeListeners.get(property);
-        if (listeners == null) {
-            return;
-        }
-        listeners.splice(id, 1);
+        this.changeListeners.get(property)?.delete(id);
     }
 
     /**

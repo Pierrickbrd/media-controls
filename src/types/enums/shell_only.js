@@ -5,7 +5,7 @@ import Clutter from "gi://Clutter";
 export const ControlIconOptions = {
     LOOP_NONE: {
         name: "loop",
-        iconName: "media-playlist-repeat-symbolic",
+        icon: "repeat",
         menuProps: {
             index: 0,
             options: {
@@ -17,7 +17,7 @@ export const ControlIconOptions = {
     },
     LOOP_TRACK: {
         name: "loop",
-        iconName: "media-playlist-repeat-song-symbolic",
+        icon: "repeat-one",
         menuProps: {
             index: 0,
             options: {
@@ -28,7 +28,7 @@ export const ControlIconOptions = {
     },
     LOOP_PLAYLIST: {
         name: "loop",
-        iconName: "media-playlist-repeat-symbolic",
+        icon: "repeat",
         menuProps: {
             index: 0,
             options: {
@@ -39,14 +39,14 @@ export const ControlIconOptions = {
     },
     SEEK_BACKWARD: {
         name: "seekbackward",
-        iconName: "media-seek-backward-symbolic",
+        icon: "seek-backward",
         panelProps: {
             index: 0,
         },
     },
     PREVIOUS: {
         name: "previous",
-        iconName: "media-skip-backward-symbolic",
+        icon: "skip-previous",
         menuProps: {
             index: 1,
             options: {
@@ -61,7 +61,7 @@ export const ControlIconOptions = {
     },
     PLAY: {
         name: "playpausestop",
-        iconName: "media-playback-start-symbolic",
+        icon: "play",
         menuProps: {
             index: 2,
             options: {
@@ -75,7 +75,7 @@ export const ControlIconOptions = {
     },
     PAUSE: {
         name: "playpausestop",
-        iconName: "media-playback-pause-symbolic",
+        icon: "pause",
         menuProps: {
             index: 2,
             options: {
@@ -89,7 +89,7 @@ export const ControlIconOptions = {
     },
     STOP: {
         name: "playpausestop",
-        iconName: "media-playback-stop-symbolic",
+        icon: "stop",
         menuProps: {
             index: 2,
             options: {
@@ -103,7 +103,7 @@ export const ControlIconOptions = {
     },
     NEXT: {
         name: "next",
-        iconName: "media-skip-forward-symbolic",
+        icon: "skip-next",
         menuProps: {
             index: 3,
             options: {
@@ -118,14 +118,14 @@ export const ControlIconOptions = {
     },
     SEEK_FORWARD: {
         name: "seekforward",
-        iconName: "media-seek-forward-symbolic",
+        icon: "seek-forward",
         panelProps: {
             index: 4,
         },
     },
     SHUFFLE_ON: {
         name: "shuffle",
-        iconName: "media-playlist-shuffle-symbolic",
+        icon: "shuffle",
         menuProps: {
             index: 4,
             options: {
@@ -136,12 +136,13 @@ export const ControlIconOptions = {
     },
     SHUFFLE_OFF: {
         name: "shuffle",
-        iconName: "media-playlist-consecutive-symbolic",
+        icon: "shuffle",
         menuProps: {
             index: 4,
             options: {
                 xExpand: false,
                 xAlign: Clutter.ActorAlign.END,
+                opacity: 160,
             },
         },
     },
